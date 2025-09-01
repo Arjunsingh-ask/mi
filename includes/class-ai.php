@@ -22,7 +22,7 @@ class AISEO_AI {
         update_post_meta($post_id,'_aiseo_focus_keyword',sanitize_text_field($data['focus_keyword']));
         update_post_meta($post_id,'_aiseo_meta_description',sanitize_text_field($data['description']));
         update_post_meta($post_id,'_aiseo_meta_title',sanitize_text_field($data['title']));
-
+        update_option('aiseo_last_ai_run', current_time('mysql')); // ✅ record last run
         wp_send_json_success(['message'=>'Optimized','data'=>$data]);
     }
 
