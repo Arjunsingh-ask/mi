@@ -7,6 +7,7 @@ class AISEO_Admin {
         add_action('admin_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('add_meta_boxes', [$this, 'add_meta_box']);
         add_action('save_post', [$this, 'save_post_data']);
+        add_action('wp_dashboard_setup', [$this,'dashboard_widget']);
     }
 
     public function register_menu() {
@@ -62,6 +63,20 @@ class AISEO_Admin {
         <div id="aiseo-ai-output"></div>
         <?php
     }
+public function dashboard_widget() {
+    wp_add_dashboard_widget('aiseo_dashboard','AI SEO Health',['AISEO_Admin','render_dashboard_widget']);
+}
+
+public static function render_dashboard_widget() {
+    $settings = get_option('aiseo_settings',[]);
+    $last_optimized = get_option('aiseo_last_ai_run','Never');
+    echo '<ul>';
+    echo '<li>📄 Sitemap: '.(isset($settings['sitemap']) && $settings['sitemap'] ? 'Enabled ✅' : 'Disabled ❌').'</li>';
+    echo '<li>📊 Schema: '.implode(', ',array_keys(array_filter($settings['schemas'] ?? []))).'</li>';
+    echo '<li>🤖 Last AI Optimization: '.$last_optimized.'</li>';
+    echo '</ul>';
+    echo '<p><a href="'.admin_url('admin.php?page=aiseo-settings').'" class="button">Go to SEO Settings</a></p>';
+}
 
     public function save_post_data($post_id) {
         if (!isset($_POST['aiseo_nonce']) || !wp_verify_nonce($_POST['aiseo_nonce'],'aiseo_save')) return;
