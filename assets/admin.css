@@ -1,7 +1,2 @@
-.ai-seo-agent-settings,
-.ai-seo-agent-bulk {
-    max-width: 900px;
-}
-.ai-seo-agent-health li {
-    margin-bottom: 5px;
-}
+#aiseo-ai-output { margin-top:10px; padding:8px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px; }
+#aiseo-bulk-log { margin-top:10px; }
