@@ -1,2 +1,4 @@
-#aiseo-ai-output { margin-top:10px; padding:8px; background:#f9f9f9; border:1px solid #ddd; border-radius:4px; }
-#aiseo-bulk-log { margin-top:10px; }
+.aiseo-tabs { margin: 16px 0; }
+.aiseo-tabs .nav-tab { cursor: pointer; }
+.aiseo-tab-panel { background: #fff; padding: 16px; border: 1px solid #ddd; margin-top: 0; }
+.aiseo-gen-body { padding: 10px; background: #f8f8f8; border: 1px solid #e5e5e5; margin: 10px 0; }
