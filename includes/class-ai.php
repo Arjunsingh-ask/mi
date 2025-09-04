@@ -3,121 +3,344 @@ if (!defined('ABSPATH')) exit;
 
 class AISEO_AI {
     private $api_key;
+
     public function __construct() {
         $this->api_key = get_option('aiseo_openai_key','');
-        add_action('wp_ajax_aiseo_generate_content', [$this,'generate_content']);
-        add_action('wp_ajax_aiseo_bulk_optimize_pages', [$this,'bulk_optimize_pages']);
-        add_action('wp_ajax_aiseo_suggest_internal', [$this,'suggest_internal']);
-        add_action('wp_ajax_aiseo_rebuild_sitemap', [$this,'rebuild_sitemap']);
+
+        // AJAX routes
+        add_action('wp_ajax_aiseo_fetch_page_data',        [$this,'fetch_page_data']);        // (a)
+        add_action('wp_ajax_aiseo_generate_preview',       [$this,'generate_preview']);        // (b)
+        add_action('wp_ajax_aiseo_publish_updates',        [$this,'publish_updates']);         // (c)
+        add_action('wp_ajax_aiseo_bulk_optimize_pages_v2', [$this,'bulk_optimize_pages_v2']);  // (d)
+        add_action('wp_ajax_aiseo_suggest_internal_v2',    [$this,'suggest_internal_v2']);     // (e)
+        add_action('wp_ajax_aiseo_tools_rebuild_ping',     [$this,'tools_rebuild_ping']);      // (f)
     }
 
-    /** Content generator for a selected PAGE */
-    public function generate_content() {
+    /* ========== (a) Fetch current page snapshot (meta + body) ========== */
+    public function fetch_page_data() {
         check_ajax_referer('aiseo_ai','nonce');
         if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
 
-        $page_id = isset($_POST['page_id']) ? intval($_POST['page_id']) : 0;
-        $prompt  = isset($_POST['prompt']) ? sanitize_textarea_field($_POST['prompt']) : '';
-        $page    = get_post($page_id);
-        if (!$page || $page->post_type !== 'page') wp_send_json_error('Invalid page');
+        $page_id = intval($_POST['page_id'] ?? 0);
+        $p = get_post($page_id);
+        if (!$p || $p->post_type !== 'page') wp_send_json_error('Invalid page');
 
-        $title = get_the_title($page);
-        $content = wp_strip_all_tags($page->post_content);
-
-        $result = $this->call_ai_json([
-            'role'=>'user',
-            'content'=>"You are an SEO/content assistant. Given a Page and a brief, produce JSON with keys: {h1, outline (array of H2 strings), body (HTML), meta_title, meta_description, focus_keyword}. Keep meta_description <= 155 chars.\n\nPage Title: {$title}\nBrief: {$prompt}\nCurrent Excerpt: ".mb_substr(wp_strip_all_tags($content),0,400)
-        ]);
-
-        if (!$result) {
-            // fallback heuristic
-            $fallback = [
-                'h1' => $title,
-                'outline' => ['Introduction','Key Benefits','How it Works','FAQ','Contact'],
-                'body' => '<h2>Introduction</h2><p>...</p>',
-                'meta_title' => wp_trim_words($title, 10,''),
-                'meta_description' => wp_trim_words($prompt ?: $content, 24,''),
-                'focus_keyword' => sanitize_title($title),
-            ];
-            wp_send_json_success($fallback);
-        }
-        wp_send_json_success($result);
+        $meta = [
+            'meta_title'       => get_post_meta($page_id,'_aiseo_meta_title', true) ?: get_the_title($p),
+            'meta_description' => get_post_meta($page_id,'_aiseo_meta_description', true) ?: '',
+            'focus_keyword'    => get_post_meta($page_id,'_aiseo_focus_keyword', true) ?: '',
+        ];
+        wp_send_json_success(['meta'=>$meta, 'body'=>$p->post_content]);
     }
 
-    /** Bulk optimize PAGE meta */
-    public function bulk_optimize_pages() {
+    /* ========== (b) Generate preview (length-matched + layout-safe) ========== */
+    public function generate_preview() {
+        check_ajax_referer('aiseo_ai','nonce');
+        if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
+
+        $page_id = intval($_POST['page_id'] ?? 0);
+        $p = get_post($page_id);
+        if (!$p || $p->post_type !== 'page') wp_send_json_error('Invalid page');
+
+        $keyword = sanitize_text_field($_POST['keyword'] ?? '');
+        $geo     = sanitize_text_field($_POST['geo'] ?? '');
+        $brief   = sanitize_textarea_field($_POST['brief'] ?? '');
+        $keep    = !empty($_POST['keep']);
+        $length  = !empty($_POST['length']);
+
+        $analysis = $this->analyze_page_structure_and_length($p->post_content);
+        $target   = $analysis['word_count'];
+        $min = $length ? max(200, (int)floor($target*0.9)) : max(600, $target);
+        $max = $length ? (int)ceil($target*1.1)            : $min+300;
+
+        $title = get_the_title($p);
+        $focus = get_post_meta($page_id,'_aiseo_focus_keyword',true) ?: $keyword;
+
+        $prompt = [
+            'role'=>'user',
+            'content' =>
+"Generate layout-safe page copy for a WordPress Page.
+
+Constraints:
+- Preserve existing heading order: ".implode(' > ', $analysis['structure'])."
+- Total length: between {$min} and {$max} words.
+- Use service keyword + GEO naturally: '{$focus}' ; GEO: '{$geo}'.
+- Optimize for AI Overviews: include a succinct intro (<= 50 words) and scannable sections.
+- Include a helpful FAQ (3–6 Q&A) based on likely Google intents for '{$focus}' in '{$geo}'.
+- Return strict JSON:
+{ h1, sections:[{h2,content, h3s?:[{h3,content}]}], faq:[{q,a}], meta_title, meta_description (<=155), focus_keyword }
+
+Context Title: {$title}
+Additional Notes: {$brief}
+Current excerpt: ".mb_substr(wp_strip_all_tags($p->post_content),0,400)
+        ];
+
+        $ai = $this->call_ai_json($prompt, false);
+        if (!$ai) {
+            // fallback if no API/response
+            $ai = [
+                'h1'=>$title,
+                'sections'=>[['h2'=>'Introduction','content'=>'<p>…</p>']],
+                'faq'=>[['q'=>'What is this?','a'=>'A local service.']],
+                'meta_title'=>$title,
+                'meta_description'=>'Learn about '.$focus.' in '.$geo.'.',
+                'focus_keyword'=>$focus ?: sanitize_title($title),
+            ];
+        }
+
+        $html = $this->build_html_from_ai($ai, $keep ? $analysis['structure'] : ['h1','h2','h2','h3']);
+
+        wp_send_json_success([
+            'meta'=>[
+              'meta_title'=>$ai['meta_title'] ?? $title,
+              'meta_description'=>$ai['meta_description'] ?? '',
+              'focus_keyword'=>$ai['focus_keyword'] ?? $focus
+            ],
+            'body'=>$html
+        ]);
+    }
+
+    /* ========== (c) Publish updates (applies preview results) ========== */
+    public function publish_updates() {
+        check_ajax_referer('aiseo_ai','nonce');
+        if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
+
+        $page_id = intval($_POST['page_id'] ?? 0);
+        $p = get_post($page_id);
+        if (!$p || $p->post_type !== 'page') wp_send_json_error('Invalid page');
+
+        // Recompute preview server-side to keep a single source of truth
+        $result = $this->generate_preview_internal($p, [
+            'keyword' => sanitize_text_field($_POST['keyword'] ?? ''),
+            'geo'     => sanitize_text_field($_POST['geo'] ?? ''),
+            'brief'   => sanitize_textarea_field($_POST['brief'] ?? ''),
+            'keep'    => !empty($_POST['keep']),
+            'length'  => !empty($_POST['length']),
+        ]);
+
+        // Update content
+        $update = ['ID'=>$page_id,'post_content'=>$result['body']];
+        if (!empty($_POST['publish'])) $update['post_status'] = 'publish';
+        wp_update_post($update);
+
+        // Update meta
+        update_post_meta($page_id,'_aiseo_meta_title',       sanitize_text_field($result['meta']['meta_title']));
+        update_post_meta($page_id,'_aiseo_meta_description', sanitize_text_field($result['meta']['meta_description']));
+        update_post_meta($page_id,'_aiseo_focus_keyword',    sanitize_text_field($result['meta']['focus_keyword']));
+
+        update_option('aiseo_last_ai_run', current_time('mysql'));
+
+        wp_send_json_success(['ok'=>true]);
+    }
+
+    private function generate_preview_internal($p, $req) {
+        $analysis = $this->analyze_page_structure_and_length($p->post_content);
+        $keep     = !empty($req['keep']);
+        $length   = !empty($req['length']);
+        $target   = $analysis['word_count'];
+        $min = $length ? max(200, (int)floor($target*0.9)) : max(600, $target);
+        $max = $length ? (int)ceil($target*1.1)            : $min+300;
+
+        $title = get_the_title($p);
+        $focus = get_post_meta($p->ID,'_aiseo_focus_keyword',true) ?: sanitize_text_field($req['keyword'] ?? '');
+
+        $prompt = [
+          'role'=>'user',
+          'content'=>"Return JSON { h1, sections:[{h2,content,h3s?:[{h3,content}]}], faq:[{q,a}], meta_title, meta_description (<=155), focus_keyword }.
+Preserve order: ".implode(' > ', $analysis['structure'])."; words between {$min} and {$max}; keyword '{$focus}'; GEO '".sanitize_text_field($req['geo'] ?? '')."'.
+Title: {$title}. Notes: ".sanitize_textarea_field($req['brief'] ?? '')."."
+        ];
+
+        $ai = $this->call_ai_json($prompt, false);
+        if (!$ai) $ai = ['h1'=>$title,'sections'=>[['h2'=>'Intro','content'=>'<p>…</p>']],'meta_title'=>$title,'meta_description'=>'','focus_keyword'=>$focus];
+
+        return [
+          'meta'=>[
+            'meta_title'=>$ai['meta_title'] ?? $title,
+            'meta_description'=>$ai['meta_description'] ?? '',
+            'focus_keyword'=>$ai['focus_keyword'] ?? $focus
+          ],
+          'body'=>$this->build_html_from_ai($ai, $keep ? $analysis['structure'] : ['h1','h2','h2','h3'])
+        ];
+    }
+
+    /* ========== (d) Bulk optimizer — paged + detailed log (Pages only) ========== */
+    public function bulk_optimize_pages_v2() {
+        check_ajax_referer('aiseo_ai','nonce');
+        if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
+
+        $batch  = 20;
+        $offset = intval($_POST['offset'] ?? 0);
+
+        $all_ids = get_posts(['post_type'=>'page','post_status'=>'publish','numberposts'=>-1,'fields'=>'ids']);
+        $slice = array_slice($all_ids, $offset, $batch);
+        $log = [];
+
+        foreach ($slice as $pid) {
+            $p = get_post($pid);
+            if (!$p) continue;
+
+            $data = $this->call_ai_json([
+                'role'=>'user',
+                'content'=>"Return JSON {meta_title, meta_description, focus_keyword, slug}. Keep meta_description <= 155 chars.\nPage Title: ".get_the_title($p)."\nContent: ".mb_substr(wp_strip_all_tags($p->post_content),0,2500)
+            ]);
+
+            if (!$data || !is_array($data)) continue;
+
+            $before_title = get_post_meta($pid,'_aiseo_meta_title', true) ?: get_the_title($p);
+            $before_desc  = get_post_meta($pid,'_aiseo_meta_description', true) ?: '';
+            $before_kw    = get_post_meta($pid,'_aiseo_focus_keyword', true) ?: '';
+
+            wp_update_post(['ID'=>$pid,'post_name'=>sanitize_title($data['slug'] ?? $p->post_name)]);
+            update_post_meta($pid,'_aiseo_meta_title',       sanitize_text_field($data['meta_title'] ?? $before_title));
+            update_post_meta($pid,'_aiseo_meta_description', sanitize_text_field($data['meta_description'] ?? $before_desc));
+            update_post_meta($pid,'_aiseo_focus_keyword',    sanitize_text_field($data['focus_keyword'] ?? $before_kw));
+
+            $change = [];
+            if (($data['meta_title'] ?? '') && $data['meta_title'] !== $before_title) $change[]='title';
+            if (($data['meta_description'] ?? '') && $data['meta_description'] !== $before_desc) $change[]='description';
+            if (($data['focus_keyword'] ?? '') && $data['focus_keyword'] !== $before_kw) $change[]='keyword';
+
+            $log[] = ['id'=>$pid,'title'=>get_the_title($p),'change'=>$change ? implode(', ',$change) : 'no change'];
+        }
+
+        if ($slice) update_option('aiseo_last_ai_run', current_time('mysql'));
+
+        $next = ($offset + $batch < count($all_ids)) ? $offset + $batch : null;
+        wp_send_json_success([
+            'processed'  => $offset + count($slice),
+            'total'      => count($all_ids),
+            'next_offset'=> $next,
+            'log'        => $log
+        ]);
+    }
+
+    /* ========== (e) Internal linking suggestions (Pages only) ========== */
+    public function suggest_internal_v2() {
+        check_ajax_referer('aiseo_ai','nonce');
+        if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
+
+        $pages = get_posts(['post_type'=>'page','post_status'=>'publish','numberposts'=>-1]);
+        $list = array_map(function($p){
+            return ['id'=>$p->ID,'title'=>get_the_title($p),'url'=>get_permalink($p)];
+        }, $pages);
+
+        // Heuristic fallback if no API
+        if (empty($this->api_key)) {
+            $sugs = [];
+            foreach ($list as $a) foreach ($list as $b) {
+                if ($a['id'] === $b['id']) continue;
+                $first = strtok($a['title'],' ');
+                if ($first && stripos($b['title'],$first)!==false) {
+                    $sugs[] = ['from_title'=>$a['title'],'from_url'=>$a['url'],'to_title'=>$b['title'],'to_url'=>$b['url'],'anchor'=>$first.' in '.$b['title']];
+                }
+            }
+            return wp_send_json_success(array_slice($sugs,0,20));
+        }
+
+        $prompt = "Given these pages (title, url), propose up to 20 internal links as JSON array [{from_title,from_url,to_title,to_url,anchor}]:\n".wp_json_encode($list);
+        $arr = $this->call_ai_json(['role'=>'user','content'=>$prompt], true);
+        $out = [];
+        foreach (($arr ?: []) as $r) {
+            $out[] = [
+                'from_title'=>$r['from_title'] ?? '',
+                'from_url'  =>$r['from_url']   ?? '',
+                'to_title'  =>$r['to_title']   ?? '',
+                'to_url'    =>$r['to_url']     ?? '',
+                'anchor'    =>$r['anchor']     ?? ''
+            ];
+            if (count($out)>=20) break;
+        }
+        wp_send_json_success($out);
+    }
+
+    /* ========== (f) Tools: rebuild sitemap + ping Google/Bing ========== */
+    public function tools_rebuild_ping() {
         check_ajax_referer('aiseo_ai','nonce');
         if (!current_user_can('manage_options')) wp_send_json_error('No permission');
 
-        $pages = get_posts(['post_type'=>'page','post_status'=>'publish','numberposts'=>-1]);
-        $optimized = 0;
-
-        foreach ($pages as $p) {
-            $data = $this->call_ai_json([
-                'role'=>'user',
-                'content'=>"Return JSON {meta_title, meta_description, focus_keyword, slug}. Keep meta_description <= 155 chars.\nPage Title: ".get_the_title($p)."\nContent: ".mb_substr(wp_strip_all_tags($p->post_content),0,3000)
-            ]);
-            if (!$data) continue;
-
-            wp_update_post(['ID'=>$p->ID, 'post_name'=>sanitize_title($data['slug'] ?? $p->post_name)]);
-            update_post_meta($p->ID,'_aiseo_meta_title',sanitize_text_field($data['meta_title'] ?? get_the_title($p)));
-            update_post_meta($p->ID,'_aiseo_meta_description',sanitize_text_field($data['meta_description'] ?? ''));
-            update_post_meta($p->ID,'_aiseo_focus_keyword',sanitize_text_field($data['focus_keyword'] ?? ''));
-            $optimized++;
+        if (class_exists('AISEO_SitemapManager')) {
+            AISEO_SitemapManager::generate_sitemap(); // pages only (class does pages only)
         }
-        if ($optimized) update_option('aiseo_last_ai_run', current_time('mysql'));
-        wp_send_json_success(['optimized'=>$optimized]);
+        $sitemap_url = home_url('/sitemap.xml');
+
+        // fire-and-forget pings
+        wp_remote_get('https://www.google.com/ping?sitemap='.rawurlencode($sitemap_url), ['timeout'=>10]);
+        wp_remote_get('https://www.bing.com/ping?sitemap='.rawurlencode($sitemap_url),   ['timeout'=>10]);
+
+        wp_send_json_success(['message'=>'Sitemap rebuilt and pings sent']);
     }
 
-    /** Suggest internal links between pages (simple title-keyword cosine-ish heuristic via AI) */
-    public function suggest_internal() {
-        check_ajax_referer('aiseo_ai','nonce');
-        if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
+    /* ===================== helpers ===================== */
 
-        $pages = get_posts(['post_type'=>'page','post_status'=>'publish','numberposts'=>-1]);
-        $pairs = [];
-        $list = [];
-        foreach($pages as $p) $list[] = ['id'=>$p->ID,'title'=>get_the_title($p),'url'=>get_permalink($p)];
+    private function analyze_page_structure_and_length($html) {
+        $text_only = wp_strip_all_tags($html);
+        $words = preg_split('/\s+/', trim($text_only));
+        $word_count = max(50, count(array_filter($words)));
 
-        // If no key, do a lightweight heuristic (title substrings)
-        if (empty($this->api_key)) {
-            foreach ($list as $a) {
-                foreach ($list as $b) {
-                    if ($a['id'] === $b['id']) continue;
-                    if (stripos($b['title'], explode(' ', $a['title'])[0]) !== false) {
-                        $pairs[] = ['from'=>$a, 'to'=>$b, 'anchor'=>sanitize_text_field($a['title'])];
+        preg_match_all('/<(h[1-3])[^>]*>(.*?)<\/\1>/is', $html, $m, PREG_SET_ORDER);
+        $structure = [];
+        foreach ($m as $match) { $structure[] = strtolower($match[1]); }
+        if (!$structure) $structure = ['h1','h2','h2','h3'];
+
+        return ['word_count'=>$word_count,'structure'=>$structure];
+    }
+
+    private function build_html_from_ai($ai, $structure) {
+        $out = [];
+
+        if (!empty($ai['h1'])) {
+            $out[] = '<h1>'.esc_html($ai['h1']).'</h1>';
+        }
+
+        if (!empty($ai['sections']) && is_array($ai['sections'])) {
+            $si = 0;
+            foreach ($structure as $tag) {
+                if ($tag === 'h1') continue;
+                $sec = $ai['sections'][$si] ?? null;
+                if (!$sec) break;
+
+                if ($tag === 'h2' && !empty($sec['h2'])) {
+                    $out[] = '<h2>'.esc_html($sec['h2']).'</h2>';
+                    if (!empty($sec['content'])) $out[] = wp_kses_post($sec['content']);
+
+                    if (!empty($sec['h3s']) && is_array($sec['h3s'])) {
+                        foreach ($sec['h3s'] as $h3) {
+                            if (!empty($h3['h3']))  $out[] = '<h3>'.esc_html($h3['h3']).'</h3>';
+                            if (!empty($h3['content'])) $out[] = wp_kses_post($h3['content']);
+                        }
+                    }
+                    $si++;
+                } elseif ($tag === 'h3') {
+                    // if structure expects an h3 next; try to take first available
+                    if (!empty($sec['h3s'][0]['h3'])) {
+                        $h3 = $sec['h3s'][0];
+                        $out[] = '<h3>'.esc_html($h3['h3']).'</h3>';
+                        if (!empty($h3['content'])) $out[] = wp_kses_post($h3['content']);
                     }
                 }
             }
-            wp_send_json_success(['suggestions'=>array_slice($pairs,0,20)]);
+        } else {
+            if (!empty($ai['body'])) $out[] = wp_kses_post($ai['body']);
         }
 
-        // With AI, ask for top 20 pairs
-        $prompt = "Given the following pages with titles and URLs, propose up to 20 internal link suggestions as JSON array: [{from_title, from_url, to_title, to_url, suggested_anchor}]. Prefer linking hub pages to relevant detail pages.\n\n".wp_json_encode($list);
-        $data = $this->call_ai_json(['role'=>'user','content'=>$prompt], true);
-        if (!$data || !is_array($data)) $data = [];
-        wp_send_json_success(['suggestions'=>array_slice($data,0,20)]);
+        return implode("\n", $out);
     }
 
-    public function rebuild_sitemap() {
-        check_ajax_referer('aiseo_ai','nonce');
-        if (!current_user_can('manage_options')) wp_send_json_error('No permission');
-        if (class_exists('AISEO_SitemapManager')) {
-            AISEO_SitemapManager::generate_sitemap();
-            wp_send_json_success(['message'=>'Sitemap rebuilt']);
-        }
-        wp_send_json_error('Unavailable');
-    }
-
-    /** Helper: OpenAI call returning decoded JSON or null */
+    /**
+     * Call OpenAI Chat Completions. Returns decoded JSON (array) or null.
+     * If no API key set, returns null so callers use fallbacks.
+     */
     private function call_ai_json($message, $expect_array = false) {
         if (empty($this->api_key)) return null;
+
         $body = [
             'model' => 'gpt-4o-mini',
             'messages' => [ $message ],
-            'max_tokens' => 800,
+            'max_tokens' => 900,
             'temperature' => 0.4,
         ];
+
         $res = wp_remote_post('https://api.openai.com/v1/chat/completions', [
             'headers' => [
                 'Authorization' => 'Bearer '.$this->api_key,
@@ -127,6 +350,7 @@ class AISEO_AI {
             'timeout' => 45,
         ]);
         if (is_wp_error($res)) return null;
+
         $json = json_decode(wp_remote_retrieve_body($res), true);
         $text = $json['choices'][0]['message']['content'] ?? '';
         $parsed = json_decode(trim($text), true);
