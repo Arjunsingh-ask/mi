@@ -3,7 +3,7 @@ if (!defined('ABSPATH')) exit;
 
 class AISEO_Optimizer {
     public function __construct() {
-        add_action('admin_footer', [$this, 'readability']);
+        add_action('admin_footer', [$this,'readability']);
     }
     public function readability() {
         ?>
