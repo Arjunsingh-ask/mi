@@ -92,3 +92,8 @@ jQuery(function($){
     $("#aiseo-link-rows").append(clone);
   });
 });
+wp_localize_script('aiseo-admin','aiseo_ai',[
+  'ajax'  => admin_url('admin-ajax.php'),
+  'nonce' => wp_create_nonce('aiseo_ai'),
+]);
+
