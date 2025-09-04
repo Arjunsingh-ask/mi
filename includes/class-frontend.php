@@ -3,10 +3,10 @@ if (!defined('ABSPATH')) exit;
 
 class AISEO_Frontend {
     public function __construct() {
-        add_action('wp_head', [$this, 'meta']);
+        add_action('wp_head', [$this,'meta']);
     }
     public function meta() {
-        if (!is_singular()) return;
+        if (!is_page()) return;
         global $post;
         $title = get_post_meta($post->ID, '_aiseo_meta_title', true) ?: get_the_title($post);
         $desc  = get_post_meta($post->ID, '_aiseo_meta_description', true) ?: wp_trim_words(wp_strip_all_tags($post->post_content), 28);
