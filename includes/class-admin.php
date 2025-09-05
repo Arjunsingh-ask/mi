@@ -48,6 +48,7 @@ class AISEO_Admin {
         if ($hook === 'toplevel_page_aiseo-dashboard' || $hook === 'seo-agent_page_aiseo-settings' || in_array($hook, ['page.php','post.php','post-new.php'], true)) {
             wp_enqueue_style('aiseo-admin', AI_SEO_AGENT_URL.'assets/admin.css', [], '1.2.0');
             wp_enqueue_script('aiseo-admin', AI_SEO_AGENT_URL.'assets/admin.js', ['jquery'], '1.2.0', true);
+            wp_enqueue_script('aiseo-admin', AI_SEO_AGENT_URL.'assets/admin.js', ['jquery'], '1.3.0', true);
             wp_localize_script('aiseo-admin','aiseo_ai',[
                 'ajax'  => admin_url('admin-ajax.php'),
                 'nonce' => wp_create_nonce('aiseo_ai'),
