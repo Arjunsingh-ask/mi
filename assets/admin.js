@@ -19,19 +19,66 @@ jQuery(function($){
       page_id: page_id,
       prompt: prompt
     }, function(res){
-      if(res.success){
-        var d = res.data;
-        $("#aiseo-gen-output").html(
-          "<p><strong>H1:</strong> "+(d.h1||'')+"</p>"+
-          (d.outline?("<p><strong>Outline:</strong> "+d.outline.join(" • ")+"</p>"):"")+
-          (d.body?("<div class='aiseo-gen-body'>"+d.body+"</div>"):"")+
-          "<p><strong>Meta Title:</strong> "+(d.meta_title||'')+"<br><strong>Meta Description:</strong> "+(d.meta_description||'')+"<br><strong>Focus Keyword:</strong> "+(d.focus_keyword||'')+"</p>"
-        );
+// inside the success callback of aiseo_generate_content
+if(res.success){
+  var d = res.data || {};
+  // render result (keep your existing markup if you like)
+  var html =
+    "<p><strong>H1:</strong> "+(d.h1||"")+"</p>"+
+    (d.outline ? "<p><strong>Outline:</strong> "+d.outline.join(" • ")+"</p>" : "")+
+    "<div class='aiseo-gen-body' style='margin:8px 0'>"+(d.body||"")+"</div>"+
+    "<p><strong>Meta Title:</strong> "+(d.meta_title||"")+
+    "<br><strong>Meta Description:</strong> "+(d.meta_description||"")+
+    "<br><strong>Focus Keyword:</strong> "+(d.focus_keyword||"")+"</p>"+
+    "<p>" +
+      "<button class='button' id='aiseo-apply-draft'>💾 Apply to Draft</button> " +
+      "<button class='button button-primary' id='aiseo-apply-publish'>✅ Apply & Publish</button>" +
+    "</p>";
+
+  $("#aiseo-gen-output").html(html);
+
+  // stash result for publish clicks
+  var payload = {
+    meta_title: d.meta_title || "",
+    meta_description: d.meta_description || "",
+    focus_keyword: d.focus_keyword || "",
+    body: d.body || ""
+  };
+  $("#aiseo-gen-output").data("aiseo-payload", payload);
+
+  // click handlers (use one function to avoid duplicate code)
+  function applyGenerated(publishFlag){
+    var page_id = $("#aiseo_gen_page").val();
+    var saved   = $("#aiseo-gen-output").data("aiseo-payload");
+    if(!page_id || !saved){ return; }
+    $("#aiseo-gen-output").append("<p>⏳ Applying...</p>");
+    $.post(aiseo_ai.ajax, {
+      action: "aiseo_apply_generated",
+      nonce: aiseo_ai.nonce,
+      page_id: page_id,
+      meta_title: saved.meta_title,
+      meta_description: saved.meta_description,
+      focus_keyword: saved.focus_keyword,
+      body: saved.body,
+      publish: publishFlag ? 1 : 0
+    }, function(r){
+      if(r && r.success){
+        $("#aiseo-gen-output").append("<p>✅ Saved"+(publishFlag?" & published":"")+" successfully.</p>");
       } else {
-        $("#aiseo-gen-output").html("❌ "+(res.data||'Error'));
+        $("#aiseo-gen-output").append("<p>❌ "+(r && r.data ? r.data : "Error")+"</p>");
       }
+    }).fail(function(xhr){
+      $("#aiseo-gen-output").append("<p>❌ Request failed ("+xhr.status+")</p>");
     });
-  });
+  }
+
+  $("#aiseo-apply-draft").off("click").on("click", function(){ applyGenerated(false); });
+  $("#aiseo-apply-publish").off("click").on("click", function(){ applyGenerated(true); });
+
+} else {
+  $("#aiseo-gen-output").html("❌ "+(res.data || "Error"));
+}
+
 
   // Bulk optimize pages
   $("#aiseo-bulk-optimize-pages").on("click", function(){
