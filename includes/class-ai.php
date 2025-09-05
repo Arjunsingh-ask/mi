@@ -13,6 +13,9 @@ class AISEO_AI {
         add_action('wp_ajax_aiseo_bulk_optimize_pages_v2', [$this,'bulk_optimize_pages_v2']);  // Bulk
         add_action('wp_ajax_aiseo_suggest_internal_v2',    [$this,'suggest_internal_v2']);     // Internal links
         add_action('wp_ajax_aiseo_tools_rebuild_ping',     [$this,'tools_rebuild_ping']);      // Tools
+        // Legacy dashboard button support (Content Generator)
+        add_action('wp_ajax_aiseo_generate_content', [$this, 'generate_content_legacy']);
+
     }
 
     /* ---------- Fetch current page snapshot ---------- */
