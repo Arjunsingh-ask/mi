@@ -308,6 +308,59 @@ Title: {$title}. Notes: ".sanitize_textarea_field($req['brief'] ?? '')."."
         return implode("\n", $out);
     }
 
+public function generate_content_legacy() {
+    check_ajax_referer('aiseo_ai','nonce');
+    if ( ! current_user_can('edit_pages') ) {
+        wp_send_json_error('No permission');
+    }
+
+    $page_id = isset($_POST['page_id']) ? intval($_POST['page_id']) : 0;
+    $prompt  = isset($_POST['prompt'])  ? sanitize_textarea_field($_POST['prompt']) : '';
+
+    $page = get_post($page_id);
+    if ( ! $page || $page->post_type !== 'page' ) {
+        wp_send_json_error('Invalid page');
+    }
+
+    $title   = get_the_title($page);
+    $content = wp_strip_all_tags($page->post_content);
+
+    // Ask AI for a Yoast-style content pack (H1/H2/H3 + meta + FAQ).
+    $ai = $this->call_ai_json([
+        'role'    => 'user',
+        'content' =>
+"Return JSON with keys:
+{ h1, outline: [H2 strings], body: HTML, meta_title, meta_description (<=155), focus_keyword }.
+
+Title: {$title}
+Brief: {$prompt}
+Current excerpt: ".mb_substr($content, 0, 4000)
+    ]);
+
+    // Fallback when no API/blocked egress
+    if ( ! $ai || ! is_array($ai) ) {
+        $ai = [
+            'h1'               => $title,
+            'outline'          => ['Introduction','Key Benefits','How it Works','FAQ','Contact'],
+            'body'             => '<h2>Introduction</h2><p>…</p>',
+            'meta_title'       => wp_trim_words($title, 12, ''),
+            'meta_description' => wp_trim_words($prompt ?: $content, 26, ''),
+            'focus_keyword'    => sanitize_title($title),
+        ];
+    }
+
+    // Legacy UI expects these exact keys
+    wp_send_json_success([
+        'h1'               => $ai['h1'] ?? $title,
+        'outline'          => $ai['outline'] ?? [],
+        'body'             => $ai['body'] ?? '',
+        'meta_title'       => $ai['meta_title'] ?? $title,
+        'meta_description' => $ai['meta_description'] ?? '',
+        'focus_keyword'    => $ai['focus_keyword'] ?? sanitize_title($title),
+    ]);
+}
+
+    
     private function call_ai_json($message, $expect_array = false) {
         if (empty($this->api_key)) return null;
         $body = ['model'=>'gpt-4o-mini','messages'=>[$message],'max_tokens'=>900,'temperature'=>0.4];
