@@ -6,6 +6,9 @@ class AISEO_AI {
 
     public function __construct() {
         $this->api_key = get_option('aiseo_openai_key','');
+        add_action('wp_ajax_aiseo_fetch_page_data',  [$this,'fetch_page_data']);   // fetch CURRENT
+        add_action('wp_ajax_aiseo_generate_content', [$this,'generate_content_legacy']); // already used by your UI
+        add_action('wp_ajax_aiseo_apply_generated',  [$this,'apply_generated']);   // PUBLISH new
         add_action('wp_ajax_aiseo_apply_generated', [$this, 'apply_generated']); // NEW
         add_action('wp_ajax_aiseo_fetch_page_data',        [$this,'fetch_page_data']);        // Fetch current
         add_action('wp_ajax_aiseo_generate_preview',       [$this,'generate_preview']);        // Preview
