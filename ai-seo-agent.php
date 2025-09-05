@@ -21,6 +21,18 @@ require_once AI_SEO_AGENT_PATH.'includes/class-schema-manager.php';
 require_once AI_SEO_AGENT_PATH.'includes/class-sitemap-manager.php';
 require_once AI_SEO_AGENT_PATH.'includes/class-ai.php';
 
+// BOOTSTRAP – make sure classes actually run
+add_action('plugins_loaded', function () {
+    if (class_exists('AISEO_Admin'))          new AISEO_Admin();
+    if (class_exists('AISEO_Frontend'))       new AISEO_Frontend();
+    if (class_exists('AISEO_Optimizer'))      new AISEO_Optimizer();
+    if (class_exists('AISEO_SchemaManager'))  new AISEO_SchemaManager();
+    if (class_exists('AISEO_SitemapManager')) new AISEO_SitemapManager();
+    if (class_exists('AISEO_AI'))             new AISEO_AI(); // <<< required for AJAX
+});
+
+
+
 // 3) Activation hook (optional)
 function aiseo_activate_pages_only() {
     if (!get_option('aiseo_settings')) {
