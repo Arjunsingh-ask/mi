@@ -313,46 +313,46 @@ Title: {$title}. Notes: ".sanitize_textarea_field($req['brief'] ?? '')."."
 
 public function generate_content_legacy() {
     check_ajax_referer('aiseo_ai','nonce');
-    if ( ! current_user_can('edit_pages') ) {
-        wp_send_json_error('No permission');
-    }
+    if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
 
-    $page_id = isset($_POST['page_id']) ? intval($_POST['page_id']) : 0;
-    $prompt  = isset($_POST['prompt'])  ? sanitize_textarea_field($_POST['prompt']) : '';
-
-    $page = get_post($page_id);
-    if ( ! $page || $page->post_type !== 'page' ) {
-        wp_send_json_error('Invalid page');
-    }
+    $page_id = intval($_POST['page_id'] ?? 0);
+    $prompt  = sanitize_textarea_field($_POST['prompt'] ?? '');
+    $page    = get_post($page_id);
+    if (!$page || $page->post_type !== 'page') wp_send_json_error('Invalid page');
 
     $title   = get_the_title($page);
-    $content = wp_strip_all_tags($page->post_content);
+    $current = wp_strip_all_tags($page->post_content);
+    $word_ct = max(200, str_word_count($current)); // match length baseline
 
-    // Ask AI for a Yoast-style content pack (H1/H2/H3 + meta + FAQ).
     $ai = $this->call_ai_json([
-        'role'    => 'user',
-        'content' =>
-"Return JSON with keys:
-{ h1, outline: [H2 strings], body: HTML, meta_title, meta_description (<=155), focus_keyword }.
+      'role'=>'user',
+      'content'=>
+"Task: Produce a UNIQUE, HUMANIZED rewrite for a WordPress Page. Avoid plagiarism; do not copy sentences verbatim.
+Constraints:
+- Match current length within ±10% (target ~{$word_ct} words).
+- Use clear H1/H2/H3 structure.
+- Keep HTML minimal and clean (p, h2, h3, ul, ol).
+- Provide meta title (<= 60 chars) and meta description (<= 155 chars).
+- Keep tone professional and natural; remove fluff.
+- Return STRICT JSON:
+{ h1, outline: [H2 strings], body: HTML, meta_title, meta_description, focus_keyword }
 
-Title: {$title}
-Brief: {$prompt}
-Current excerpt: ".mb_substr($content, 0, 4000)
+Page Title: {$title}
+Brief/Notes: {$prompt}
+Current Body (for sense only, rephrase fully): ".mb_substr($current,0,4000)
     ]);
 
-    // Fallback when no API/blocked egress
-    if ( ! $ai || ! is_array($ai) ) {
+    if (!$ai || !is_array($ai)) {
         $ai = [
             'h1'               => $title,
             'outline'          => ['Introduction','Key Benefits','How it Works','FAQ','Contact'],
             'body'             => '<h2>Introduction</h2><p>…</p>',
             'meta_title'       => wp_trim_words($title, 12, ''),
-            'meta_description' => wp_trim_words($prompt ?: $content, 26, ''),
+            'meta_description' => wp_trim_words($prompt ?: $current, 26, ''),
             'focus_keyword'    => sanitize_title($title),
         ];
     }
 
-    // Legacy UI expects these exact keys
     wp_send_json_success([
         'h1'               => $ai['h1'] ?? $title,
         'outline'          => $ai['outline'] ?? [],
@@ -361,47 +361,51 @@ Current excerpt: ".mb_substr($content, 0, 4000)
         'meta_description' => $ai['meta_description'] ?? '',
         'focus_keyword'    => $ai['focus_keyword'] ?? sanitize_title($title),
     ]);
-    
 }
-    public function apply_generated() {
+public function apply_generated() {
     check_ajax_referer('aiseo_ai','nonce');
-    if ( ! current_user_can('edit_pages') ) {
-        wp_send_json_error('No permission');
-    }
+    if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
 
     $page_id = intval($_POST['page_id'] ?? 0);
     $post    = get_post($page_id);
-    if ( ! $post || $post->post_type !== 'page' ) {
-        wp_send_json_error('Invalid page');
-    }
+    if (!$post || $post->post_type !== 'page') wp_send_json_error('Invalid page');
 
-    // Meta + body from UI
     $meta_title       = sanitize_text_field($_POST['meta_title'] ?? '');
     $meta_description = sanitize_text_field($_POST['meta_description'] ?? '');
     $focus_keyword    = sanitize_text_field($_POST['focus_keyword'] ?? '');
     $body_html        = wp_kses_post($_POST['body'] ?? '');
-    $publish          = ! empty($_POST['publish']);
+    $publish          = !empty($_POST['publish']);
 
-    // Update page content (layout stays theme-controlled; we only replace inner HTML)
-    $update = ['ID' => $page_id, 'post_content' => $body_html];
-    if ($publish) { $update['post_status'] = 'publish'; }
+    $update = ['ID'=>$page_id, 'post_content'=>$body_html];
+    if ($publish) $update['post_status'] = 'publish';
     wp_update_post($update);
 
-    // Update meta fields
     if ($meta_title !== '')       update_post_meta($page_id, '_aiseo_meta_title', $meta_title);
     if ($meta_description !== '') update_post_meta($page_id, '_aiseo_meta_description', $meta_description);
     if ($focus_keyword !== '')    update_post_meta($page_id, '_aiseo_focus_keyword', $focus_keyword);
 
     update_option('aiseo_last_ai_run', current_time('mysql'));
+    if (class_exists('AISEO_SitemapManager')) AISEO_SitemapManager::generate_sitemap();
 
-    // (Optional) trigger sitemap refresh lazily
-    if (class_exists('AISEO_SitemapManager')) {
-        AISEO_SitemapManager::generate_sitemap();
-    }
-
-    wp_send_json_success(['updated' => true]);
+    wp_send_json_success(['updated'=>true]);
 }
 
+public function fetch_page_data() {
+    check_ajax_referer('aiseo_ai','nonce');
+    if (!current_user_can('edit_pages')) wp_send_json_error('No permission');
+
+    $page_id = intval($_POST['page_id'] ?? 0);
+    $p = get_post($page_id);
+    if (!$p || $p->post_type !== 'page') wp_send_json_error('Invalid page');
+
+    $meta = [
+        'meta_title'       => get_post_meta($page_id,'_aiseo_meta_title', true) ?: get_the_title($p),
+        'meta_description' => get_post_meta($page_id,'_aiseo_meta_description', true) ?: '',
+        'focus_keyword'    => get_post_meta($page_id,'_aiseo_focus_keyword', true) ?: '',
+    ];
+    wp_send_json_success(['meta'=>$meta, 'body'=>$p->post_content]);
+}
+    
     private function call_ai_json($message, $expect_array = false) {
         if (empty($this->api_key)) return null;
         $body = ['model'=>'gpt-4o-mini','messages'=>[$message],'max_tokens'=>900,'temperature'=>0.4];
