@@ -85,6 +85,42 @@ class AISEO_Admin {
                 <div id="aiseo-gen-output"></div>
                 <?php if(empty($key)) echo '<p class="notice notice-warning">Tip: Add your OpenAI API key in Settings for best results.</p>'; ?>
             </div>
+            <div class="aiseo-tab-panel" id="tab-content" style="display:block">
+  <h2>Content Generator (Pages)</h2>
+  <p>Pick a page. Fetch current content, generate a humanized unique version, then publish.</p>
+
+  <p>
+    <label>Select Page:
+      <?php wp_dropdown_pages(['show_option_none'=>'— Select a page —','name'=>'aiseo_gen_page','id'=>'aiseo_gen_page']); ?>
+    </label>
+  </p>
+
+  <p><textarea id="aiseo_gen_prompt" rows="4" style="width:100%" placeholder="Optional notes: tone, key selling points, FAQs to include…"></textarea></p>
+
+  <p>
+    <button class="button" id="aiseo-fetch-current">🔎 Fetch Current</button>
+    <button class="button button-primary" id="aiseo-generate-content">✨ Generate Content</button>
+  </p>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div>
+      <h3>Current Content</h3>
+      <div id="aiseo-current-meta"></div>
+      <div id="aiseo-current-body" class="aiseo-diff-box"></div>
+    </div>
+    <div>
+      <h3>New (Humanized AI)</h3>
+      <div id="aiseo-new-meta"></div>
+      <div id="aiseo-new-body" class="aiseo-diff-box"></div>
+      <p>
+        <button class="button" id="aiseo-apply-draft" style="display:none">💾 Apply to Draft</button>
+        <button class="button button-primary" id="aiseo-apply-publish" style="display:none">✅ Apply & Publish</button>
+      </p>
+      <div id="aiseo-gen-output"></div>
+    </div>
+  </div>
+</div>
+
 
             <!-- Page Optimizer -->
             <div class="aiseo-tab-panel" id="tab-optimize">
