@@ -6,7 +6,7 @@ class AISEO_AI {
 
     public function __construct() {
         $this->api_key = get_option('aiseo_openai_key','');
-
+        add_action('wp_ajax_aiseo_apply_generated', [$this, 'apply_generated']); // NEW
         add_action('wp_ajax_aiseo_fetch_page_data',        [$this,'fetch_page_data']);        // Fetch current
         add_action('wp_ajax_aiseo_generate_preview',       [$this,'generate_preview']);        // Preview
         add_action('wp_ajax_aiseo_publish_updates',        [$this,'publish_updates']);         // Publish
@@ -358,9 +358,47 @@ Current excerpt: ".mb_substr($content, 0, 4000)
         'meta_description' => $ai['meta_description'] ?? '',
         'focus_keyword'    => $ai['focus_keyword'] ?? sanitize_title($title),
     ]);
+    
+}
+    public function apply_generated() {
+    check_ajax_referer('aiseo_ai','nonce');
+    if ( ! current_user_can('edit_pages') ) {
+        wp_send_json_error('No permission');
+    }
+
+    $page_id = intval($_POST['page_id'] ?? 0);
+    $post    = get_post($page_id);
+    if ( ! $post || $post->post_type !== 'page' ) {
+        wp_send_json_error('Invalid page');
+    }
+
+    // Meta + body from UI
+    $meta_title       = sanitize_text_field($_POST['meta_title'] ?? '');
+    $meta_description = sanitize_text_field($_POST['meta_description'] ?? '');
+    $focus_keyword    = sanitize_text_field($_POST['focus_keyword'] ?? '');
+    $body_html        = wp_kses_post($_POST['body'] ?? '');
+    $publish          = ! empty($_POST['publish']);
+
+    // Update page content (layout stays theme-controlled; we only replace inner HTML)
+    $update = ['ID' => $page_id, 'post_content' => $body_html];
+    if ($publish) { $update['post_status'] = 'publish'; }
+    wp_update_post($update);
+
+    // Update meta fields
+    if ($meta_title !== '')       update_post_meta($page_id, '_aiseo_meta_title', $meta_title);
+    if ($meta_description !== '') update_post_meta($page_id, '_aiseo_meta_description', $meta_description);
+    if ($focus_keyword !== '')    update_post_meta($page_id, '_aiseo_focus_keyword', $focus_keyword);
+
+    update_option('aiseo_last_ai_run', current_time('mysql'));
+
+    // (Optional) trigger sitemap refresh lazily
+    if (class_exists('AISEO_SitemapManager')) {
+        AISEO_SitemapManager::generate_sitemap();
+    }
+
+    wp_send_json_success(['updated' => true]);
 }
 
-    
     private function call_ai_json($message, $expect_array = false) {
         if (empty($this->api_key)) return null;
         $body = ['model'=>'gpt-4o-mini','messages'=>[$message],'max_tokens'=>900,'temperature'=>0.4];
